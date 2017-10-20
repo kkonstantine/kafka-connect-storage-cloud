@@ -18,6 +18,7 @@ package io.confluent.connect.s3.format.avro;
 
 import org.apache.avro.file.CodecFactory;
 import org.apache.avro.file.DataFileWriter;
+import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericDatumWriter;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.errors.ConnectException;
@@ -81,6 +82,12 @@ public class AvroRecordWriterProvider implements RecordWriterProvider<S3SinkConn
           // NonRecordContainers to just their value to properly handle these types
           if (value instanceof NonRecordContainer) {
             value = ((NonRecordContainer) value).getValue();
+            NonRecordContainer wrapper = (NonRecordContainer) value;
+            if (wrapper.getSchema().getType().equals(org.apache.avro.Schema.Type.ENUM)) {
+              value = new GenericData.EnumSymbol(wrapper.getSchema(), wrapper.getValue());
+            } else {
+              value = ((NonRecordContainer) value).getValue();
+            }
           }
           writer.append(value);
         } catch (IOException e) {

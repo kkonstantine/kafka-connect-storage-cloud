@@ -17,6 +17,7 @@
 package io.confluent.connect.s3.format.avro;
 
 import io.confluent.connect.avro.AvroData;
+import io.confluent.connect.avro.AvroDataConfig;
 import io.confluent.connect.s3.S3SinkConnectorConfig;
 import io.confluent.connect.s3.storage.S3Storage;
 import io.confluent.connect.storage.format.Format;
@@ -31,7 +32,11 @@ public class AvroFormat implements Format<S3SinkConnectorConfig, String> {
   public AvroFormat(S3Storage storage) {
     this.storage = storage;
     this.avroData = new AvroData(
-        storage.conf().getInt(S3SinkConnectorConfig.SCHEMA_CACHE_SIZE_CONFIG)
+        new AvroDataConfig.Builder()
+            .with(AvroDataConfig.SCHEMAS_CACHE_SIZE_CONFIG, storage.conf().getInt(S3SinkConnectorConfig.SCHEMA_CACHE_SIZE_CONFIG))
+            .with(AvroDataConfig.CONNECT_META_DATA_CONFIG, false)
+            .with(AvroDataConfig.ENHANCED_AVRO_SCHEMA_SUPPORT_CONFIG, true)
+            .build()
     );
   }
 

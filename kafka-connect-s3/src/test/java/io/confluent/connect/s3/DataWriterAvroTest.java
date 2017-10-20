@@ -18,8 +18,6 @@ package io.confluent.connect.s3;
 
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
-import io.confluent.common.utils.MockTime;
-import io.confluent.common.utils.Time;
 import org.apache.avro.file.DataFileStream;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.io.DatumReader;
@@ -28,6 +26,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.record.TimestampType;
 import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.data.SchemaAndValue;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.SchemaProjector;
 import org.apache.kafka.connect.data.Struct;
@@ -52,18 +51,21 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
+import io.confluent.common.utils.MockTime;
+import io.confluent.common.utils.Time;
 import io.confluent.connect.s3.format.avro.AvroFormat;
 import io.confluent.connect.s3.format.avro.AvroUtils;
 import io.confluent.connect.s3.storage.S3Storage;
 import io.confluent.connect.s3.util.FileUtils;
 import io.confluent.connect.storage.hive.HiveConfig;
-import io.confluent.connect.storage.hive.schema.TimeBasedSchemaGenerator;
 import io.confluent.connect.storage.partitioner.DefaultPartitioner;
 import io.confluent.connect.storage.partitioner.Partitioner;
 import io.confluent.connect.storage.partitioner.PartitionerConfig;
 import io.confluent.connect.storage.partitioner.TimeBasedPartitioner;
 import io.confluent.kafka.serializers.NonRecordContainer;
 
+import static io.confluent.connect.avro.AvroData.AVRO_TYPE_ENUM;
+import static io.confluent.connect.avro.AvroData.CONNECT_ENUM_DOC_PROP;
 import static org.apache.kafka.common.utils.Time.SYSTEM;
 import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.assertEquals;
@@ -119,6 +121,22 @@ public class DataWriterAvroTest extends TestWithMockedS3 {
     task = new S3SinkTask(connectorConfig, context, storage, partitioner, format, SYSTEM_TIME);
 
     List<SinkRecord> sinkRecords = createRecords(7);
+    // Perform write
+    task.put(sinkRecords);
+    task.close(context.assignment());
+    task.stop();
+
+    long[] validOffsets = {0, 3, 6};
+    verify(sinkRecords, validOffsets);
+
+  }
+
+  @Test
+  public void testWriteRecordsWithEnhancedAvroData() throws Exception {
+    setUp();
+    task = new S3SinkTask(connectorConfig, context, storage, partitioner, format, SYSTEM_TIME);
+    List<SinkRecord> sinkRecords = createRecordsWithEnums(7, 0, Collections.singleton(new TopicPartition(TOPIC, PARTITION)));
+
     // Perform write
     task.put(sinkRecords);
     task.close(context.assignment());
@@ -591,9 +609,36 @@ public class DataWriterAvroTest extends TestWithMockedS3 {
     for (TopicPartition tp : partitions) {
       for (long offset = startOffset; offset < startOffset + size; ++offset) {
         sinkRecords.add(new SinkRecord(TOPIC, tp.partition(), Schema.STRING_SCHEMA, key, schema, record, offset));
+       }
+    }
+    return sinkRecords;
+  }
+
+  protected List<SinkRecord> createRecordsWithEnums(int size, long startOffset, Set<TopicPartition> partitions) {
+    String key = "key";
+    Schema schema = createEnumSchema();
+    SchemaAndValue valueAndSchema = new SchemaAndValue(schema, "bar");
+    List<SinkRecord> sinkRecords = new ArrayList<>();
+    for (TopicPartition tp : partitions) {
+      for (long offset = startOffset; offset < startOffset + size; ++offset) {
+        sinkRecords.add(new SinkRecord(TOPIC, tp.partition(), Schema.STRING_SCHEMA, key, schema, valueAndSchema.value(), offset));
       }
     }
     return sinkRecords;
+  }
+
+  public Schema createEnumSchema() {
+    // Enums are just converted to strings, original enum is preserved in parameters
+    org.apache.avro.Schema avroSchema = org.apache.avro.SchemaBuilder.builder()
+        .enumeration("TestEnum").symbols("foo", "bar", "baz");
+    SchemaBuilder builder = SchemaBuilder.string().name("TestEnum");
+    builder.parameter(CONNECT_ENUM_DOC_PROP, null);
+    builder.parameter(AVRO_TYPE_ENUM, "TestEnum");
+    for(String enumSymbol : new String[]{"foo", "bar", "baz"}) {
+      builder.parameter(AVRO_TYPE_ENUM+"."+enumSymbol, enumSymbol);
+    }
+
+    return builder.build();
   }
 
   protected List<SinkRecord> createRecordsWithTimestamp(
