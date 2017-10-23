@@ -19,6 +19,7 @@ package io.confluent.connect.s3;
 import org.junit.Before;
 import org.junit.Test;
 
+import io.confluent.connect.avro.AvroDataConfig;
 import io.confluent.connect.s3.storage.S3Storage;
 import io.confluent.connect.storage.common.StorageCommonConfig;
 
@@ -48,5 +49,13 @@ public class S3SinkConnectorConfigTest extends S3SinkConnectorTestBase {
     assertNull(connectorConfig.getString(StorageCommonConfig.STORE_URL_CONFIG));
   }
 
+  @Test
+  public void testAvroDataConfigSupported() throws Exception {
+    properties.put(AvroDataConfig.ENHANCED_AVRO_SCHEMA_SUPPORT_CONFIG, "true");
+    properties.put(AvroDataConfig.CONNECT_META_DATA_CONFIG, "false");
+    connectorConfig = new S3SinkConnectorConfig(properties);
+    assertEquals(true, connectorConfig.get(AvroDataConfig.ENHANCED_AVRO_SCHEMA_SUPPORT_CONFIG));
+    assertEquals(false, connectorConfig.get(AvroDataConfig.CONNECT_META_DATA_CONFIG));
+  }
 }
 
