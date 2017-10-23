@@ -134,7 +134,7 @@ public class DataWriterAvroTest extends TestWithMockedS3 {
   }
 
   @Test
-  public void testWriteRecordsWithEnhancedAvroData() throws Exception {
+  public void testWriteRecordsOfEnumsWithEnhancedAvroData() throws Exception {
     localProps.put(AvroDataConfig.ENHANCED_AVRO_SCHEMA_SUPPORT_CONFIG, "true");
     localProps.put(AvroDataConfig.CONNECT_META_DATA_CONFIG, "true");
     setUp();
@@ -149,6 +149,29 @@ public class DataWriterAvroTest extends TestWithMockedS3 {
     long[] validOffsets = {0, 3, 6};
     verify(sinkRecords, validOffsets);
 
+  }
+
+  @Test
+  public void testToConnectUnion() {
+
+  }
+
+  @Test
+  public void testWriteRecordsOfUnionsWithEnhancedAvroData() throws Exception {
+    localProps.put(AvroDataConfig.ENHANCED_AVRO_SCHEMA_SUPPORT_CONFIG, "true");
+    localProps.put(AvroDataConfig.CONNECT_META_DATA_CONFIG, "true");
+    setUp();
+    task = new S3SinkTask(connectorConfig, context, storage, partitioner, format, SYSTEM_TIME);
+    List<SinkRecord> sinkRecords = createRecordsWithUnion(7, 0, Collections.singleton(new TopicPartition (TOPIC, PARTITION)));
+
+    // Perform write
+    task.put(sinkRecords);
+    task.close(context.assignment());
+    task.stop();
+
+    //long[] validOffsets = {0, 3, 6, 9, 12, 15, 18, 21, 24, 27};
+    long[] validOffsets = {0, 3, 6, 9, 12, 15, 18, 21};
+    verify(sinkRecords, validOffsets);
   }
 
   @Test
@@ -633,8 +656,6 @@ public class DataWriterAvroTest extends TestWithMockedS3 {
 
   public Schema createEnumSchema() {
     // Enums are just converted to strings, original enum is preserved in parameters
-    org.apache.avro.Schema avroSchema = org.apache.avro.SchemaBuilder.builder()
-        .enumeration("TestEnum").symbols("foo", "bar", "baz");
     SchemaBuilder builder = SchemaBuilder.string().name("TestEnum");
     builder.parameter(CONNECT_ENUM_DOC_PROP, null);
     builder.parameter(AVRO_TYPE_ENUM, "TestEnum");
@@ -642,6 +663,45 @@ public class DataWriterAvroTest extends TestWithMockedS3 {
       builder.parameter(AVRO_TYPE_ENUM+"."+enumSymbol, enumSymbol);
     }
     return builder.build();
+  }
+
+  protected List<SinkRecord> createRecordsWithUnion(
+      int size,
+      long startOffset,
+      Set<TopicPartition> partitions
+  ) {
+    Schema recordSchema1 = SchemaBuilder.struct().name("Test1")
+        .field("test", Schema.INT32_SCHEMA).optional().build();
+    Schema recordSchema2 = SchemaBuilder.struct().name("io.confluent.Test2")
+        .field("test", Schema.INT32_SCHEMA).optional().build();
+    Schema schema = SchemaBuilder.struct()
+        .name("io.confluent.connect.avro.Union")
+        .field("int", Schema.OPTIONAL_INT32_SCHEMA)
+        //.field("string", Schema.OPTIONAL_STRING_SCHEMA)
+        .field("Test1", recordSchema1)
+        .field("io.confluent.Test2", recordSchema2)
+        .build();
+
+    SchemaAndValue valueAndSchemaInt = new SchemaAndValue(schema, new Struct(schema).put("int", 12));
+    //SchemaAndValue valueAndSchemaString = new SchemaAndValue(schema, new Struct(schema).put ("string", "teststring"));
+
+    Struct schema1Test = new Struct(schema).put("Test1", new Struct(recordSchema1).put("test", 12));
+    SchemaAndValue valueAndSchema1 = new SchemaAndValue(schema, schema1Test);
+
+    Struct schema2Test = new Struct(schema).put("io.confluent.Test2", new Struct(recordSchema2).put("test", 12));
+    SchemaAndValue valueAndSchema2 = new SchemaAndValue(schema, schema2Test);
+
+    String key = "key";
+    List<SinkRecord> sinkRecords = new ArrayList<>();
+    for (TopicPartition tp : partitions) {
+      for (long offset = startOffset; offset < startOffset + 3 * size;) {
+        sinkRecords.add(new SinkRecord(TOPIC, tp.partition(), Schema.STRING_SCHEMA, key, schema, valueAndSchemaInt.value(), offset++));
+        //sinkRecords.add(new SinkRecord(TOPIC, tp.partition(), Schema.STRING_SCHEMA, key, schema, valueAndSchemaString.value(), offset++));
+        sinkRecords.add(new SinkRecord(TOPIC, tp.partition(), Schema.STRING_SCHEMA, key, schema, valueAndSchema1.value(), offset++));
+        sinkRecords.add(new SinkRecord(TOPIC, tp.partition(), Schema.STRING_SCHEMA, key, schema, valueAndSchema2.value(), offset++));
+      }
+    }
+    return sinkRecords;
   }
 
   protected List<SinkRecord> createRecordsWithTimestamp(
