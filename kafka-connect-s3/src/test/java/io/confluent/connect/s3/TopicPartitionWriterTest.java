@@ -40,6 +40,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import io.confluent.common.utils.MockTime;
 import io.confluent.connect.s3.format.avro.AvroFormat;
@@ -107,12 +108,7 @@ public class TopicPartitionWriterTest extends TestWithMockedS3 {
     storage = new S3Storage(connectorConfig, url, S3_TEST_BUCKET_NAME, s3) {
       @Override
       public S3OutputStream create(String path, boolean overwrite) {
-        return new S3OutputStream(path, this.conf(), s3) {
-          @Override
-          public void commit() throws IOException {
-            throw new ConnectException("Fake exception");
-          }
-        };
+        return new S3OutputStreamFlaky(path, this.conf(), s3);
       }
     };
 
@@ -642,7 +638,7 @@ public class TopicPartitionWriterTest extends TestWithMockedS3 {
     verify(expectedFiles, 3, schema, records);
   }
 
-  @Test(expected = ConnectException.class)
+  @Test
   public void testPropagateErrorsDuringTimeBasedCommits() throws Exception {
     localProps.put(S3SinkConnectorConfig.FLUSH_SIZE_CONFIG, "1000");
     localProps.put(
@@ -656,7 +652,7 @@ public class TopicPartitionWriterTest extends TestWithMockedS3 {
     setUpWithCommitException();
 
     // Define the partitioner
-    TimeBasedPartitioner<FieldSchema> partitioner = new TimeBasedPartitioner<>();
+    TimeBasedPartitioner partitioner = new TimeBasedPartitioner<>();
     parsedConfig.put(PartitionerConfig.PARTITION_DURATION_MS_CONFIG, TimeUnit.DAYS.toMillis(1));
     parsedConfig.put(
         PartitionerConfig.TIMESTAMP_EXTRACTOR_CLASS_CONFIG, MockedWallclockTimestampExtractor.class.getName());
@@ -680,6 +676,11 @@ public class TopicPartitionWriterTest extends TestWithMockedS3 {
     // No records written to S3
     topicPartitionWriter.write();
     long timestampFirst = time.milliseconds();
+
+    // 11 minutes
+    time.sleep(TimeUnit.MINUTES.toMillis(11));
+    // Records are written due to scheduled rotation
+    topicPartitionWriter.write();
 
     // 11 minutes
     time.sleep(TimeUnit.MINUTES.toMillis(11));
