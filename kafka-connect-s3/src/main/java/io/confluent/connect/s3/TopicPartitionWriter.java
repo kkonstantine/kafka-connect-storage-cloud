@@ -296,7 +296,6 @@ public class TopicPartitionWriter {
           log.error("Exception on topic partition {}: ", tp, e);
           failureTime = time.milliseconds();
           setRetryTimeout(timeoutMs);
-          throw e; // #269 propagate exceptions from time-based commits
         }
       }
 
