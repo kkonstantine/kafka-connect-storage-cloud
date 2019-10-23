@@ -20,6 +20,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.errors.DataException;
+import org.apache.kafka.connect.errors.RetriableException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
 import org.apache.kafka.connect.sink.SinkTaskContext;
@@ -49,6 +50,7 @@ public class S3SinkTask extends SinkTask {
 
   private S3SinkConnectorConfig connectorConfig;
   private String url;
+  private long timeoutMs;
   private S3Storage storage;
   private final Set<TopicPartition> assignment;
   private final Map<TopicPartition, TopicPartitionWriter> topicPartitionWriters;
@@ -91,6 +93,7 @@ public class S3SinkTask extends SinkTask {
     try {
       connectorConfig = new S3SinkConnectorConfig(props);
       url = connectorConfig.getString(StorageCommonConfig.STORE_URL_CONFIG);
+      timeoutMs = connectorConfig.getLong(S3SinkConnectorConfig.RETRY_BACKOFF_CONFIG);
 
       @SuppressWarnings("unchecked")
       Class<? extends S3Storage> storageClass =
@@ -130,15 +133,7 @@ public class S3SinkTask extends SinkTask {
     // a call to "close".
     assignment.addAll(partitions);
     for (TopicPartition tp : assignment) {
-      TopicPartitionWriter writer = new TopicPartitionWriter(
-          tp,
-          writerProvider,
-          partitioner,
-          connectorConfig,
-          context,
-          time
-      );
-      topicPartitionWriters.put(tp, writer);
+      topicPartitionWriters.put(tp, newTopicPartitionWriter(tp));
     }
   }
 
@@ -190,7 +185,20 @@ public class S3SinkTask extends SinkTask {
     }
 
     for (TopicPartition tp : assignment) {
-      topicPartitionWriters.get(tp).write();
+      TopicPartitionWriter writer = topicPartitionWriters.get(tp);
+      try {
+        writer.write();
+      } catch (RetriableException e) {
+        log.error("Exception on topic partition {}: ", tp, e);
+        Long currentStartOffset = writer.currentStartOffset();
+        if (currentStartOffset != null) {
+          context.offset(tp, currentStartOffset);
+        }
+        context.timeout(timeoutMs);
+        writer = newTopicPartitionWriter(tp);
+        writer.failureTime(time.milliseconds());
+        topicPartitionWriters.put(tp, writer);
+      }
     }
   }
 
@@ -207,12 +215,8 @@ public class S3SinkTask extends SinkTask {
     for (TopicPartition tp : assignment) {
       Long offset = topicPartitionWriters.get(tp).getOffsetToCommitAndReset();
       if (offset != null) {
-        if (offset < 0) {
-          throw new ConnectException("Commit failed. Retry all of them");
-        }
         log.trace("Forwarding to framework request to commit offset: {} for {}", offset, tp);
         offsetsToCommit.put(tp, new OffsetAndMetadata(offset));
-
       }
     }
     return offsetsToCommit;
@@ -245,6 +249,17 @@ public class S3SinkTask extends SinkTask {
   // Visible for testing
   TopicPartitionWriter getTopicPartitionWriter(TopicPartition tp) {
     return topicPartitionWriters.get(tp);
+  }
+
+  TopicPartitionWriter newTopicPartitionWriter(TopicPartition tp) {
+    return new TopicPartitionWriter(
+        tp,
+        writerProvider,
+        partitioner,
+        connectorConfig,
+        context,
+        time
+    );
   }
 
   // Visible for testing
