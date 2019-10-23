@@ -26,8 +26,13 @@ import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.ObjectListing;
 import org.apache.avro.file.SeekableInput;
+import org.apache.kafka.connect.errors.ConnectException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.io.OutputStream;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import io.confluent.connect.s3.S3SinkConnectorConfig;
 import io.confluent.connect.s3.util.S3ProxyConfig;
@@ -45,6 +50,9 @@ import static io.confluent.connect.s3.S3SinkConnectorConfig.WAN_MODE_CONFIG;
  * S3 implementation of the storage interface for Connect sinks.
  */
 public class S3Storage implements Storage<S3SinkConnectorConfig, ObjectListing> {
+
+  private static final Logger log = LoggerFactory.getLogger(S3Storage.class);
+  private static final AtomicInteger RETRIES = new AtomicInteger(0);
 
   private final String url;
   private final String bucketName;
@@ -190,7 +198,25 @@ public class S3Storage implements Storage<S3SinkConnectorConfig, ObjectListing> 
     }
 
     // currently ignore what is passed as method argument.
-    return new S3OutputStream(path, this.conf, s3);
+    return new S3OutputStreamFlaky(path, this.conf, s3);
+  }
+
+  class S3OutputStreamFlaky extends S3OutputStream {
+
+    public S3OutputStreamFlaky(String key, S3SinkConnectorConfig conf, AmazonS3 s3) {
+      super(key, conf, s3);
+    }
+
+    @Override
+    public void commit() throws IOException {
+      if (RETRIES.getAndIncrement() % 2 == 0) {
+        int count = RETRIES.get();
+        log.error("About to throw fake exception because {} % 2 == {}", count - 1, count % 2);
+        close();
+        throw new ConnectException("Fake exception");
+      }
+      super.commit();
+    }
   }
 
   @Override
